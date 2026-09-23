@@ -33,6 +33,14 @@ obj.threshold = 0.1
 
 obj.log = hs.logger.new("StallWatchdog", "info")
 
+--- StallWatchdog:init()
+--- Method
+--- Called automatically by `hs.loadSpoon()`. Logs the loaded version.
+function obj:init()
+	self.log.f("Loaded %s v%s", self.name, self.version)
+	return self
+end
+
 obj._timer = nil
 obj._lastTick = nil
 
