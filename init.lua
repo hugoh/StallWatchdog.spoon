@@ -31,6 +31,12 @@ obj.interval = 0.05
 --- Seconds a tick may arrive late before it is logged as a stall (default: 0.1).
 obj.threshold = 0.1
 
+--- StallWatchdog.reportInterval
+--- Variable
+--- Seconds between summary lines in the Console: ticks, stalls, worst stall and
+--- Lua memory since the previous report. Set to `false` to disable (default: 60).
+obj.reportInterval = 60
+
 obj.log = hs.logger.new("StallWatchdog", "info")
 
 --- StallWatchdog:init()
@@ -42,15 +48,39 @@ function obj:init()
 end
 
 obj._timer = nil
+obj._reportTimer = nil
 obj._lastTick = nil
+obj._ticks = 0
+obj._stalls = 0
+obj._worst = 0
+obj._lastLuaKB = nil
 
 local NS_PER_SECOND = 1e9
 
 function obj:_tick()
 	local now = hs.timer.absoluteTime()
 	local late = (now - self._lastTick) / NS_PER_SECOND - self.interval
-	if late > self.threshold then self.log.wf("Main thread stalled %.0f ms", late * 1000) end
+	if late > self.threshold then
+		self.log.wf("Main thread stalled %.0f ms", late * 1000)
+		self._stalls = self._stalls + 1
+	end
+	self._ticks = self._ticks + 1
+	self._worst = math.max(self._worst, late)
 	self._lastTick = now
+end
+
+function obj:_report()
+	local luaKB = collectgarbage("count")
+	self.log.f(
+		"%ds: ticks=%d stalls=%d worst=%.0fms lua=%.3fMB (%+.1fkB)",
+		self.reportInterval,
+		self._ticks,
+		self._stalls,
+		self._worst * 1000,
+		luaKB / 1024,
+		luaKB - self._lastLuaKB
+	)
+	self._ticks, self._stalls, self._worst, self._lastLuaKB = 0, 0, 0, luaKB
 end
 
 --- StallWatchdog:isRunning() -> boolean
@@ -67,6 +97,11 @@ function obj:isRunning() return self._timer ~= nil and self._timer:running() end
 function obj:start()
 	if self:isRunning() then return self end
 	self._lastTick = hs.timer.absoluteTime()
+	self._ticks, self._stalls, self._worst = 0, 0, 0
+	if self.reportInterval then
+		self._lastLuaKB = collectgarbage("count")
+		self._reportTimer = hs.timer.new(self.reportInterval, function() self:_report() end):start()
+	end
 	self._timer = hs.timer.new(self.interval, function() self:_tick() end):start()
 	return self
 end
@@ -81,6 +116,10 @@ function obj:stop()
 	if self._timer then
 		self._timer:stop()
 		self._timer = nil
+	end
+	if self._reportTimer then
+		self._reportTimer:stop()
+		self._reportTimer = nil
 	end
 	return self
 end
@@ -105,16 +144,16 @@ end
 
 --- StallWatchdog:configure(opts) -> StallWatchdog
 --- Method
---- Sets `interval` and/or `threshold` from a table. A running watchdog is
+--- Sets `interval`, `threshold` and/or `reportInterval` from a table. A running watchdog is
 --- restarted so a new interval takes effect.
 ---
 --- Parameters:
----  * opts - a table with `interval` and/or `threshold` keys, in seconds
+---  * opts - a table with `interval`, `threshold` and/or `reportInterval` keys, in seconds
 ---
 --- Returns:
 ---  * The StallWatchdog object, for method chaining
 function obj:configure(opts)
-	for _, key in ipairs({ "interval", "threshold" }) do
+	for _, key in ipairs({ "interval", "threshold", "reportInterval" }) do
 		if opts[key] ~= nil then self[key] = opts[key] end
 	end
 	if self:isRunning() then self:stop():start() end

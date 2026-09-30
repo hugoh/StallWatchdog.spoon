@@ -83,8 +83,13 @@ Tune it with `configure()` (all optional, in seconds):
 hs.loadSpoon("StallWatchdog"):configure({
   interval = 0.05,  -- time between ticks
   threshold = 0.1,  -- how late a tick may arrive before it is logged
+  reportInterval = 60,  -- log a summary line every N seconds (false to disable)
 })
 ```
+
+While running, the Console gets a line like
+`60s: ticks=1200 stalls=2 worst=340ms lua=18.412MB (+200.0kB)` — counts since the previous
+report, plus Lua memory and its change. A steadily growing `lua=` points at a leak.
 
 ## Cost
 
