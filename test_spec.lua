@@ -127,6 +127,39 @@ describe("configure", function()
 	end)
 end)
 
+describe("periodic report", function()
+	local function reportTimer()
+		for _, t in ipairs(mock_hs._timers) do
+			if t._interval == 60 then return t end
+		end
+	end
+
+	it("defaults to 60s and can be disabled with false", function()
+		StallWatchdog:start()
+		assert.is_not_nil(reportTimer())
+		StallWatchdog:stop():configure({ reportInterval = false }):start()
+		assert.is_false(reportTimer():running())
+	end)
+
+	it("logs tick stats and Lua memory, then resets the counters", function()
+		StallWatchdog:configure({ reportInterval = 60 }):start()
+		tickAfter(50)
+		tickAfter(50 + 200)
+		reportTimer()._fn()
+		assert.are.equal(1, #StallWatchdog.log._infos)
+		assert.is_truthy(
+			StallWatchdog.log._infos[1]:match("^60s: ticks=2 stalls=1 worst=200ms lua=%d+%.%d%d%dMB %([+-]%d+%.%dkB%)$")
+		)
+		reportTimer()._fn()
+		assert.is_truthy(StallWatchdog.log._infos[2]:match("ticks=0 stalls=0 worst=0ms"))
+	end)
+
+	it("stops reporting when the watchdog stops", function()
+		StallWatchdog:configure({ reportInterval = 60 }):start():stop()
+		assert.is_false(reportTimer():running())
+	end)
+end)
+
 describe("init", function()
 	it("logs the loaded version", function()
 		assert.are.equal(StallWatchdog, StallWatchdog:init())
