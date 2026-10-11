@@ -1,53 +1,26 @@
--- Busted tests for the StallWatchdog Spoon using a mock hs environment.
+-- Busted tests for the StallWatchdog Spoon using the shared hs_mock from spoon-tools.
 
-local mock_hs
+local hs_mock = require("hs_mock")
+
+local ctl
 local StallWatchdog
 
-local MS = 1e6 -- hs.timer.absoluteTime() is in nanoseconds
-
-local function makeLogger()
-	local l = { _infos = {}, _warnings = {} }
-	l.f = function(fmt, ...) table.insert(l._infos, string.format(fmt, ...)) end
-	l.wf = function(fmt, ...) table.insert(l._warnings, string.format(fmt, ...)) end
-	return l
-end
-
 before_each(function()
-	mock_hs = { _now = 0, _timers = {} }
-	mock_hs.logger = { new = function() return makeLogger() end }
-	mock_hs.timer = {
-		absoluteTime = function() return mock_hs._now end,
-		new = function(interval, fn)
-			local t = { _interval = interval, _fn = fn, _running = false }
-			function t:start()
-				self._running = true
-				return self
-			end
-			function t:stop()
-				self._running = false
-				return self
-			end
-			function t:running() return self._running end
-			table.insert(mock_hs._timers, t)
-			return t
-		end,
-	}
-
-	package.loaded.hs = nil
-	_G.hs = mock_hs
+	local hs
+	hs, ctl = hs_mock.new()
+	_G.hs = hs
 
 	StallWatchdog = dofile("init.lua")
 end)
 
 after_each(function() StallWatchdog:stop() end)
 
-local function latestTimer() return mock_hs._timers[#mock_hs._timers] end
-
--- Advance the clock by `ms` milliseconds, then deliver one timer tick.
+-- Jump the clock by `ms` milliseconds without the tick timer firing (a stalled
+-- main thread), then deliver one tick.
 local function tickAfter(ms)
-	mock_hs._now = mock_hs._now + ms * MS
-	local t = latestTimer()
-	if t and t._running then t._fn() end
+	ctl.now = ctl.now + ms / 1000
+	local t = StallWatchdog._timer
+	if t and t:running() then t:fire() end
 end
 
 describe("start/stop", function()
@@ -56,7 +29,7 @@ describe("start/stop", function()
 	it("start() runs a timer at the configured interval", function()
 		StallWatchdog:start()
 		assert.is_true(StallWatchdog:isRunning())
-		assert.are.equal(0.05, latestTimer()._interval)
+		assert.are.equal(0.05, StallWatchdog._timer._interval)
 	end)
 
 	it("stop() stops the timer", function()
@@ -73,7 +46,7 @@ describe("start/stop", function()
 	it("logs when it is switched on or off", function()
 		StallWatchdog:toggle()
 		StallWatchdog:toggle()
-		assert.are.same({ "Watchdog on", "Watchdog off" }, StallWatchdog.log._infos)
+		assert.are.same({ "Watchdog on", "Watchdog off" }, ctl.logged("info"))
 	end)
 end)
 
@@ -81,88 +54,83 @@ describe("stall detection", function()
 	it("warns when a tick arrives later than interval + threshold", function()
 		StallWatchdog:start()
 		tickAfter(50 + 150)
-		assert.are.same({ "Main thread stalled 150 ms" }, StallWatchdog.log._warnings)
+		assert.are.same({ "Main thread stalled 150 ms" }, ctl.logged("warning"))
 	end)
 
 	it("stays quiet for ticks within the threshold", function()
 		StallWatchdog:start()
 		tickAfter(50)
 		tickAfter(50 + 100)
-		assert.are.same({}, StallWatchdog.log._warnings)
+		assert.are.same({}, ctl.logged("warning"))
 	end)
 
 	it("measures each tick from the previous one", function()
 		StallWatchdog:start()
 		tickAfter(50 + 300)
 		tickAfter(50)
-		assert.are.equal(1, #StallWatchdog.log._warnings)
+		assert.are.equal(1, #ctl.logged("warning"))
 	end)
 
 	it("does not count the time it was stopped as a stall", function()
 		StallWatchdog:start():stop()
-		mock_hs._now = mock_hs._now + 10000 * MS
+		ctl.now = ctl.now + 10
 		StallWatchdog:start()
 		tickAfter(50)
-		assert.are.same({}, StallWatchdog.log._warnings)
+		assert.are.same({}, ctl.logged("warning"))
 	end)
 end)
 
 describe("configure", function()
 	it("overrides interval and threshold", function()
 		StallWatchdog:configure({ interval = 0.1, threshold = 0.5 }):start()
-		assert.are.equal(0.1, latestTimer()._interval)
+		assert.are.equal(0.1, StallWatchdog._timer._interval)
 		tickAfter(100 + 400)
-		assert.are.same({}, StallWatchdog.log._warnings)
+		assert.are.same({}, ctl.logged("warning"))
 		tickAfter(100 + 600)
-		assert.are.same({ "Main thread stalled 600 ms" }, StallWatchdog.log._warnings)
+		assert.are.same({ "Main thread stalled 600 ms" }, ctl.logged("warning"))
 	end)
 
 	it("restarts a running watchdog so a new interval takes effect", function()
 		StallWatchdog:start()
-		local old = latestTimer()
+		local old = StallWatchdog._timer
 		StallWatchdog:configure({ interval = 0.2 })
-		assert.is_false(old._running)
+		assert.is_false(old:running())
 		assert.is_true(StallWatchdog:isRunning())
-		assert.are.equal(0.2, latestTimer()._interval)
+		assert.are.equal(0.2, StallWatchdog._timer._interval)
 	end)
 end)
 
 describe("periodic report", function()
-	local function reportTimer()
-		for _, t in ipairs(mock_hs._timers) do
-			if t._interval == 60 then return t end
-		end
-	end
-
 	it("defaults to 60s and can be disabled with false", function()
 		StallWatchdog:start()
-		assert.is_not_nil(reportTimer())
+		assert.are.equal(60, StallWatchdog._reportTimer._interval)
 		StallWatchdog:stop():configure({ reportInterval = false }):start()
-		assert.is_false(reportTimer():running())
+		assert.are.same({ StallWatchdog._timer }, ctl.timers())
 	end)
 
 	it("logs tick stats and Lua memory, then resets the counters", function()
 		StallWatchdog:configure({ reportInterval = 60 }):start()
 		tickAfter(50)
 		tickAfter(50 + 200)
-		reportTimer()._fn()
-		assert.are.equal(1, #StallWatchdog.log._infos)
+		local report = StallWatchdog._reportTimer
+		report:fire()
+		assert.are.equal(1, #ctl.logged("info"))
 		assert.is_truthy(
-			StallWatchdog.log._infos[1]:match("^60s: ticks=2 stalls=1 worst=200ms lua=%d+%.%d%d%dMB %([+-]%d+%.%dkB%)$")
+			ctl.logged("info")[1]:match("^60s: ticks=2 stalls=1 worst=200ms lua=%d+%.%d%d%dMB %([+-]%d+%.%dkB%)$")
 		)
-		reportTimer()._fn()
-		assert.is_truthy(StallWatchdog.log._infos[2]:match("ticks=0 stalls=0 worst=0ms"))
+		report:fire()
+		assert.is_truthy(ctl.logged("info")[2]:match("ticks=0 stalls=0 worst=0ms"))
 	end)
 
 	it("stops reporting when the watchdog stops", function()
 		StallWatchdog:configure({ reportInterval = 60 }):start():stop()
-		assert.is_false(reportTimer():running())
+		assert.are.same({}, ctl.timers())
 	end)
 end)
 
 describe("init", function()
 	it("logs the loaded version", function()
 		assert.are.equal(StallWatchdog, StallWatchdog:init())
-		assert.are.same({ "Loaded StallWatchdog vdev" }, StallWatchdog.log._infos)
+		assert.are.same({ "Loaded StallWatchdog vdev" }, ctl.logged("info"))
 	end)
 end)
