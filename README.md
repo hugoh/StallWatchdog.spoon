@@ -1,7 +1,7 @@
 # StallWatchdog Spoon
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Hammerspoon Spoon](https://img.shields.io/badge/Hammerspoon-Spoon-FFA500.svg)](https://www.hammerspoon.org/docs/index.html)
+[![Hammerspoon Spoon](https://img.shields.io/badge/Hammerspoon-Spoon-FFA500.svg)](https://stallwatchdog-spoon.larve.net/)
 
 A Hammerspoon Spoon that logs when Hammerspoon's main thread stalls, so you can find what's making your Hammerspoon setup sluggish.
 
